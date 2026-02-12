@@ -1,0 +1,170 @@
+from typing import Sequence, Optional
+from torchvision import transforms
+from torchvision.transforms import functional as F 
+
+# Default image size
+DEFAULT_IMG_SIZE = 320 # 224 or 256 or 320
+
+# Common normalization profile for ImageNet-pretrained models
+IMAGENET_MEAN = [0.485, 0.456, 0.406]
+IMAGENET_STD  = [0.229, 0.224, 0.225]
+
+# Recommended simpler profile for colony wells
+COLONY_MEAN = [0.5, 0.5, 0.5]
+COLONY_STD  = [0.25, 0.25, 0.25]
+
+
+def get_classifier_train_transforms(
+    img_size: int = 224,
+    use_imagenet_stats: bool = False,
+    mean: Optional[Sequence[float]] = None,
+    std: Optional[Sequence[float]] = None,
+):
+    """
+    Transforms for training the countability classifier.
+    They preserve:
+      - global plate structure
+      - colony density cues
+      - staining patterns
+    Only light augmentations are used.
+    """
+    tfms = [
+        transforms.Resize((img_size, img_size)),
+
+        # Mild geometric variations
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomVerticalFlip(),
+        transforms.RandomRotation(10),
+
+        transforms.ToTensor(),
+    ]
+
+    # Normalization logic
+    if mean is not None and std is not None:
+        tfms.append(transforms.Normalize(mean=mean, std=std))
+
+    elif use_imagenet_stats:
+        tfms.append(
+            transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
+        )
+
+    else:
+        # Default sensible stats for purple-staining wells
+        tfms.append(
+            transforms.Normalize(mean=COLONY_MEAN, std=COLONY_STD)
+        )
+
+    return transforms.Compose(tfms)
+
+def get_classifier_test_transforms(
+    img_size: int = 224,
+    use_imagenet_stats: bool = False,
+    mean: Optional[Sequence[float]] = None,
+    std: Optional[Sequence[float]] = None,
+):
+    """
+    Validation/Test transforms for the classifier:
+    no distortion, deterministic, clean images.
+    """
+    tfms = [
+        transforms.Resize((img_size, img_size)),
+        transforms.ToTensor(),
+    ]
+
+    # Normalization confidence
+    if mean is not None and std is not None:
+        tfms.append(transforms.Normalize(mean=mean, std=std))
+
+    elif use_imagenet_stats:
+        tfms.append(
+            transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
+        )
+
+    else:
+        tfms.append(
+            transforms.Normalize(mean=COLONY_MEAN, std=COLONY_STD)
+        )
+
+    return transforms.Compose(tfms)
+
+
+def get_counter_train_transforms(
+    img_size: int = DEFAULT_IMG_SIZE,
+    use_imagenet_stats: bool = False,
+    mean: Optional[Sequence[float]] = None,
+    std: Optional[Sequence[float]] = None,
+):
+    """
+    Train-time transforms optimized for colony structure.
+    These improve:
+      - contrast
+      - color bias robustness
+      - texture discrimination
+      - spatial reasoning
+    """
+
+    tfms = [
+        transforms.Resize((img_size, img_size)),
+
+        # Convert to grayscale, then back to 3‑channel RGB
+        transforms.Grayscale(num_output_channels=1),
+        transforms.Lambda(lambda img: img.convert("RGB")),
+
+        # Reveal colony structure in dense plates
+        transforms.RandomAutocontrast(p=1),
+
+        # Make model invariant to staining and illumination variation
+        #RANDOMLY CHANGE THE THINGS
+        transforms.ColorJitter(
+            brightness=0.05,
+            contrast=0.05,
+            saturation=0.05,
+        ),
+
+        # Deterministic color adjustments (instead of random ColorJitter)
+        transforms.Lambda(lambda img: F.adjust_brightness(img, 1.2)),
+        transforms.Lambda(lambda img: F.adjust_contrast(img, 1.3)),
+        transforms.Lambda(lambda img: F.adjust_saturation(img, 1.3)),
+
+        # Reduce pixel-noise overfitting,
+        # enforce colony-scale structure learning
+        transforms.RandomApply(
+            [transforms.GaussianBlur(kernel_size=3, sigma=1.0)],
+            p=1
+        ),
+        transforms.ToTensor(),
+    ]
+    return transforms.Compose(tfms)
+
+
+def get_counter_test_transforms(
+    img_size: int = DEFAULT_IMG_SIZE,
+    use_imagenet_stats: bool = False,
+    mean: Optional[Sequence[float]] = None,
+    std: Optional[Sequence[float]] = None,
+):
+    """
+    Test/validation transforms (no augmentation).
+    Clean transform pipeline: no distortions, no randomness.
+    """
+    tfms = [
+        transforms.Resize((img_size, img_size)),
+
+        # Convert to grayscale, then back to 3‑channel RGB
+        transforms.Grayscale(num_output_channels=1),
+        transforms.Lambda(lambda img: img.convert("RGB")),
+
+        transforms.RandomAutocontrast(p=1),
+
+        transforms.Lambda(lambda img: F.adjust_brightness(img, 1.2)),
+        transforms.Lambda(lambda img: F.adjust_contrast(img, 1.3)),
+        transforms.Lambda(lambda img: F.adjust_saturation(img, 1.3)),
+
+        transforms.RandomApply(
+            [transforms.GaussianBlur(kernel_size=3, sigma=1.0)],
+            p=1
+        ),
+
+        transforms.ToTensor(),
+    ]
+    return transforms.Compose(tfms)
